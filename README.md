@@ -29,9 +29,11 @@ v0.5.0-alpha.5, with its PSP, GameCube/Wii and PS2 cores rendering through it.
 | `radv_ps5_sync.c` | A binary sync object signalled by a submission's sequence number. Mesa's runtime builds timeline semaphores over it. |
 
 The swapchain is `src/vulkan/wsi/wsi_common_videoout.c`: `VK_KHR_display` on
-the console's VideoOut. It opens the output once per process, flips at vblank,
-and switches to 119.88 Hz where the title declares it and the display really
-refreshes at it (it measures, and goes back to 59.94 Hz otherwise).
+the console's VideoOut. It opens the output once per process and flips at
+vblank. Fixed-rate 119.88 Hz output is measured and restored to 59.94 Hz when
+the display does not really take it. With retail VRR title metadata, a
+successful mode change is authoritative because the output may idle at its
+48 Hz floor before the first presents.
 
 ## Where RADV changes
 

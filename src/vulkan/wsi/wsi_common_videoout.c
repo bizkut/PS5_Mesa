@@ -74,10 +74,12 @@
  * went on refreshing at 60 Hz, as a tester's did (PS5_Vulkan, R31). */
 #define VIDEOOUT_HIGH_REFRESH_LIMIT_NS UINT64_C(12500000)
 #define VIDEOOUT_PERIOD_INTERVALS 6
-/* param.json's attribute3 bit for 120 Hz output. PS5_Vulkan R31/R92 declared it with 0x80000
- * (a 120 Hz mode that requires VRR), which turns the system's VRR off; retail titles with VRR
- * declare 0x40 with 0x40000. VideoOut itself grants mode 15 or refuses it. */
+/* param.json attribute3 bits for 120 Hz output. PS5_Vulkan R31/R92 declared
+ * 0x80000 | 0x40, a high-frame-rate mode that disables system VRR. Retail
+ * VRR titles declare 0x40000 | 0x40. */
 #define VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE 0x40u
+#define VIDEOOUT_ATTRIBUTE3_VRR 0x40000u
+#define VIDEOOUT_ATTRIBUTE3_VRR_DISABLED 0x80000u
 
 #if !defined(__PROSPERO__)
 /* The host model: flips show at once and a vblank comes every millisecond,
@@ -317,8 +319,9 @@ struct wsi_videoout {
 /* The title's param.json: /app0's, or the one PS5_VIDEOOUT_PARAM_JSON names, for a title
  * without /app0 (an elevated process does not see it). */
 static bool
-videoout_title_declares_high_frame_rate(void)
+videoout_title_declares_high_frame_rate(uint32_t *attribute3_out)
 {
+   *attribute3_out = 0;
    const char *const path = getenv("PS5_VIDEOOUT_PARAM_JSON");
    FILE *const file = fopen(path != NULL && path[0] != '\0' ? path : "/app0/sce_sys/param.json", "rb");
    if (file == NULL)
@@ -330,8 +333,9 @@ videoout_title_declares_high_frame_rate(void)
    const char *at = strstr(text, "\"attribute3\"");
    if (at == NULL || (at = strchr(at, ':')) == NULL)
       return false;
-   const unsigned long value = strtoul(at + 1, NULL, 0);
-   return (value & VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE) == VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE;
+   const uint32_t attribute3 = (uint32_t)strtoul(at + 1, NULL, 0);
+   *attribute3_out = attribute3;
+   return (attribute3 & VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE) != 0;
 }
 
 /* The refresh period: the median of a few intervals between vblank waits,
@@ -360,8 +364,8 @@ videoout_vblank_period_ns(int handle)
 }
 
 /* Opens VideoOut once per process, in the high-frame-rate mode where the
- * title declares it, the output takes it and the display then refreshes at
- * it. Under lock. */
+ * title declares it and the output takes it. Fixed-rate output is verified
+ * from vblanks; VRR may idle at its floor before presents. Under lock. */
 static bool
 videoout_open_locked(void)
 {
@@ -374,7 +378,8 @@ videoout_open_locked(void)
       fprintf(stderr, "wsi/videoout: sceVideoOutOpen failed: 0x%08x\n", (unsigned)out->handle);
       return false;
    }
-   if (videoout_title_declares_high_frame_rate()) {
+   uint32_t attribute3;
+   if (videoout_title_declares_high_frame_rate(&attribute3)) {
       /* Positive: the output takes the mode. 0: it does not at the
        * console's present output, which is no error. A 1440p display answered
        * 0 while the console sent it 1080p (the console logged no 120 Hz format
@@ -388,17 +393,28 @@ videoout_open_locked(void)
             : -1;
       out->high_frame_rate = supported > 0 && configured == 0;
       if (out->high_frame_rate) {
-         /* A period of 0 is a failed wait: never taken for 119.88 Hz */
-         const uint64_t period = videoout_vblank_period_ns(out->handle);
-         if (period == 0 || period > VIDEOOUT_HIGH_REFRESH_LIMIT_NS) {
-            sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
-            out->high_frame_rate = false;
-            if (period == 0)
-               fprintf(stderr, "wsi/videoout: 119.88 Hz accepted, but a vblank wait failed; 59.94 Hz restored\n");
-            else
-               fprintf(stderr,
-                       "wsi/videoout: 119.88 Hz accepted, but a vblank comes every %.3f ms; 59.94 Hz restored\n",
-                       (double)period / 1e6);
+         const bool vrr = (attribute3 & VIDEOOUT_ATTRIBUTE3_VRR) != 0 &&
+                          (attribute3 & VIDEOOUT_ATTRIBUTE3_VRR_DISABLED) == 0;
+         if (vrr) {
+            /* Before the first presents, a VRR output may idle at its 48 Hz
+             * floor. Bare-vblank timing cannot distinguish that valid state
+             * from fixed 60 Hz, so ConfigureOutput is authoritative. */
+            fprintf(stderr, "wsi/videoout: 119.88 Hz selected with title VRR metadata\n");
+         } else {
+            /* A period of 0 is a failed wait: never taken for 119.88 Hz */
+            const uint64_t period = videoout_vblank_period_ns(out->handle);
+            if (period == 0 || period > VIDEOOUT_HIGH_REFRESH_LIMIT_NS) {
+               sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
+               out->high_frame_rate = false;
+               if (period == 0)
+                  fprintf(stderr,
+                          "wsi/videoout: 119.88 Hz accepted, but a vblank wait failed; 59.94 Hz restored\n");
+               else
+                  fprintf(stderr,
+                          "wsi/videoout: 119.88 Hz accepted, but a vblank comes every %.3f ms; "
+                          "59.94 Hz restored\n",
+                          (double)period / 1e6);
+            }
          }
       } else if (supported > 0) {
          fprintf(stderr, "wsi/videoout: 119.88 Hz refused (%d); presenting at 59.94 Hz\n", configured);
