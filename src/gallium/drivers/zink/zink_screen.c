@@ -1908,6 +1908,12 @@ zink_flush_frontbuffer(struct pipe_screen *pscreen,
    if (!zink_is_swapchain(res))
       return;
 
+   /* WGL presents with no context when nothing is current (SwapBuffers after wglMakeCurrent(NULL, NULL), which
+    * Windows answers with TRUE): there is no queue to submit on and nothing drawn since the last context flushed, so
+    * the window keeps its last frame */
+   if (!pctx)
+      return;
+
    ctx = zink_tc_context_unwrap(pctx);
 
    if (!zink_kopper_acquired(res->obj->dt, res->obj->dt_idx)) {
