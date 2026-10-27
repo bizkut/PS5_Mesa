@@ -366,6 +366,11 @@ try_copy_region(struct pipe_context *pctx, const struct pipe_blit_info *info)
    /* if we're copying between resources with matching aspects then we can probably just copy_region */
    if (src->aspect != dst->aspect)
       return false;
+   /* a swapchain source must first be acquired or read back (zink_kopper_acquire_readback), which blit_native and
+    * u_blitter do and copy_region does not: copying from another window's image that was never acquired reached
+    * zink_kopper_acquire_submit with no image index (wglMakeContextCurrentARB with a read surface of its own) */
+   if (src->obj->dt)
+      return false;
    struct pipe_blit_info new_info = *info;
 
    if (src->aspect & VK_IMAGE_ASPECT_STENCIL_BIT &&
