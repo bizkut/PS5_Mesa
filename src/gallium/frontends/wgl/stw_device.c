@@ -45,6 +45,7 @@
 #include "stw_tls.h"
 #include "stw_framebuffer.h"
 #include "stw_st.h"
+#include "stw_context.h"
 
 
 struct stw_device *stw_dev = NULL;
@@ -218,6 +219,10 @@ stw_init_thread(void)
 void
 stw_cleanup_thread(void)
 {
+   /* a context still current on an exiting thread is current nowhere now, so another thread may delete it */
+   struct stw_context *ctx = stw_dev ? stw_current_context() : NULL;
+   if (ctx && ctx->current_thread == GetCurrentThreadId())
+      ctx->current_thread = 0;
    stw_tls_cleanup_thread();
 }
 

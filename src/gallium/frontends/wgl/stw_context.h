@@ -50,6 +50,10 @@ struct stw_context
    struct stw_framebuffer *current_framebuffer;
    struct stw_framebuffer *current_read_framebuffer;
 
+   /* the thread this context is current on, 0 when it is current nowhere: WGL refuses to make it current on, or
+    * delete it from, another thread (ERROR_BUSY) */
+   DWORD current_thread;
+
    struct hud_context *hud;
 };
 
