@@ -319,6 +319,12 @@ DrvDeleteContext(DHGLRC dhglrc)
 
    stw_lock_contexts(stw_dev);
    ctx = stw_lookup_context_locked(dhglrc);
+   if (ctx && ctx->current_thread && ctx->current_thread != GetCurrentThreadId()) {
+      /* current on another thread, which would keep using it once freed */
+      stw_unlock_contexts(stw_dev);
+      SetLastError(ERROR_BUSY);
+      return false;
+   }
    handle_table_remove(stw_dev->ctx_table, dhglrc);
    stw_unlock_contexts(stw_dev);
 
@@ -435,6 +441,11 @@ stw_make_current(struct stw_framebuffer *fb, struct stw_framebuffer *fbRead, str
    if (!stw_dev)
       return false;
 
+   if (ctx && ctx->current_thread && ctx->current_thread != GetCurrentThreadId()) {
+      SetLastError(ERROR_BUSY);
+      return false;
+   }
+
    old_ctx = stw_current_context();
    if (old_ctx != NULL) {
       if (old_ctx == ctx) {
@@ -498,6 +509,8 @@ stw_make_current(struct stw_framebuffer *fb, struct stw_framebuffer *fbRead, str
       ret = st_api_make_current(ctx->st,
                                 fb ? fb->drawable : NULL,
                                 fbRead ? fbRead->drawable : NULL);
+      if (ret)
+         ctx->current_thread = GetCurrentThreadId();
 
       /* Release the old framebuffers from this context. */
       release_old_framebuffers(old_fb, old_fbRead, ctx);
@@ -526,6 +539,7 @@ fail:
       release_old_framebuffers(old_ctx->current_framebuffer, old_ctx->current_read_framebuffer, old_ctx);
       old_ctx->current_framebuffer = NULL;
       old_ctx->current_read_framebuffer = NULL;
+      old_ctx->current_thread = 0;
    }
 
    return ret;
