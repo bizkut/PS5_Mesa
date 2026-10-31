@@ -30,10 +30,21 @@ v0.5.0-alpha.5, with its PSP, GameCube/Wii and PS2 cores rendering through it.
 
 The swapchain is `src/vulkan/wsi/wsi_common_videoout.c`: `VK_KHR_display` on
 the console's VideoOut. It opens the output once per process and flips at
-vblank. Fixed-rate 119.88 Hz output is measured and restored to 59.94 Hz when
-the display does not really take it. With retail VRR title metadata, a
-successful mode change is authoritative because the output may idle at its
-48 Hz floor before the first presents.
+vblank. After a supported and successful 119.88 Hz mode change, it measures
+idle vblanks. A failed wait restores 59.94 Hz. Fixed-rate metadata retains the
+mode only at periods at or below 12.5 ms; for metadata interpreted as VRR it
+restores on periods from 16.2 through 17.2 ms inclusive, and keeps other
+positive periods, including a possible slower idle floor. The VRR path logs the
+measured idle period; this heuristic does not prove the active refresh rate.
+
+On an original PS5 (firmware 5.50) with an LG C1 on and selected, the RADV
+VRR baseline measured 20.876 ms idle and restored 59.94 Hz; patched measured
+20.873 ms and kept 119.88 Hz. Their 360-frame FIFO loops measured 59.933 and
+119.854 presents/s, respectively. VideoOut reported VRR peg/range 60/48–60
+after the baseline restore and 120/48–120 for patched. Both HFR runs reported
+119.88 Hz. These bounded results do not independently measure panel scanout or
+qualify all VRR displays. Exact builds, setup, failure history and raw logs
+are in PS5_Vulkan's `jobs/r92-output-modes/README.md`.
 
 ## Where RADV changes
 

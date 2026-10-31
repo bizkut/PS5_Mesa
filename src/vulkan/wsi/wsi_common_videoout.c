@@ -56,6 +56,7 @@
 #include "vk_util.h"
 #include "wsi_common_entrypoints.h"
 #include "wsi_common_private.h"
+#include "wsi_videoout_period.h"
 
 #if defined(__PROSPERO__)
 #include <immintrin.h>
@@ -70,13 +71,11 @@
 #define VIDEOOUT_BUFFER_ALIGNMENT (UINT64_C(2) << 20)
 #define VIDEOOUT_REFRESH_MILLIHERTZ 59940
 #define VIDEOOUT_HIGH_REFRESH_MILLIHERTZ 119880
-/* A period above this after the high-frame-rate mode was taken: the display
- * went on refreshing at 60 Hz, as a tester's did (PS5_Vulkan, R31). */
-#define VIDEOOUT_HIGH_REFRESH_LIMIT_NS UINT64_C(12500000)
 #define VIDEOOUT_PERIOD_INTERVALS 6
-/* param.json attribute3 bits for 120 Hz output. PS5_Vulkan R31/R92 declared
- * 0x80000 | 0x40, a high-frame-rate mode that disables system VRR. Retail
- * VRR titles declare 0x40000 | 0x40. */
+/* Interpretation of observed title metadata, not a documented VideoOut API:
+ * PS5_Vulkan R31/R92 used 0x80000 | 0x40 for fixed HFR. A title using
+ * 0x40000 | 0x40 produced a console VRR conversion and VRR range log.
+ * These observations motivate the VRR/VRR-disabled distinction below. */
 #define VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE 0x40u
 #define VIDEOOUT_ATTRIBUTE3_VRR 0x40000u
 #define VIDEOOUT_ATTRIBUTE3_VRR_DISABLED 0x80000u
@@ -253,6 +252,8 @@ struct wsi_videoout_output {
    mtx_t lock;
    cnd_t changed;
    bool opened;
+   /* A failed restore makes the output unusable for this process. */
+   bool initialization_failed;
    int handle;
    bool high_frame_rate;
    bool modes_settled;
@@ -364,14 +365,14 @@ videoout_vblank_period_ns(int handle)
 }
 
 /* Opens VideoOut once per process, in the high-frame-rate mode where the
- * title declares it and the output takes it. Fixed-rate output is verified
- * from vblanks; VRR may idle at its floor before presents. Under lock. */
+ * title declares it and the output takes it. Measure idle vblanks for both
+ * fixed-rate and VRR metadata; VRR may idle slower than 60 Hz. Under lock. */
 static bool
 videoout_open_locked(void)
 {
    struct wsi_videoout_output *out = &videoout_output;
    if (out->opened)
-      return out->handle >= 0;
+      return out->handle >= 0 && !out->initialization_failed;
    out->opened = true;
    out->handle = sceVideoOutOpen(PS5_VIDEO_OUT_USER_SYSTEM, 0, 0, NULL);
    if (out->handle < 0) {
@@ -395,26 +396,29 @@ videoout_open_locked(void)
       if (out->high_frame_rate) {
          const bool vrr = (attribute3 & VIDEOOUT_ATTRIBUTE3_VRR) != 0 &&
                           (attribute3 & VIDEOOUT_ATTRIBUTE3_VRR_DISABLED) == 0;
-         if (vrr) {
-            /* Before the first presents, a VRR output may idle at its 48 Hz
-             * floor. Bare-vblank timing cannot distinguish that valid state
-             * from fixed 60 Hz, so ConfigureOutput is authoritative. */
-            fprintf(stderr, "wsi/videoout: 119.88 Hz selected with title VRR metadata\n");
-         } else {
-            /* A period of 0 is a failed wait: never taken for 119.88 Hz */
-            const uint64_t period = videoout_vblank_period_ns(out->handle);
-            if (period == 0 || period > VIDEOOUT_HIGH_REFRESH_LIMIT_NS) {
+         const uint64_t period = videoout_vblank_period_ns(out->handle);
+         if (!wsi_videoout_keep_high_refresh(out->high_frame_rate, vrr, period)) {
+            const int restored =
                sceVideoOutConfigureOutput(out->handle, PS5_VIDEO_OUT_MODE_RESTORE, NULL, NULL, NULL);
-               out->high_frame_rate = false;
-               if (period == 0)
-                  fprintf(stderr,
-                          "wsi/videoout: 119.88 Hz accepted, but a vblank wait failed; 59.94 Hz restored\n");
-               else
-                  fprintf(stderr,
-                          "wsi/videoout: 119.88 Hz accepted, but a vblank comes every %.3f ms; "
-                          "59.94 Hz restored\n",
-                          (double)period / 1e6);
+            if (restored != 0) {
+               fprintf(stderr, "wsi/videoout: restoring the default output failed: 0x%08x\n",
+                       (unsigned)restored);
+               out->initialization_failed = true;
+               return false;
             }
+            out->high_frame_rate = false;
+            if (period == 0)
+               fprintf(stderr,
+                       "wsi/videoout: 119.88 Hz accepted, but a vblank wait failed; 59.94 Hz restored\n");
+            else
+               fprintf(stderr,
+                       "wsi/videoout: 119.88 Hz accepted, but a vblank comes every %.3f ms; "
+                       "59.94 Hz restored\n",
+                       (double)period / 1e6);
+         } else if (vrr) {
+            fprintf(stderr,
+                    "wsi/videoout: 119.88 Hz kept for title VRR metadata; idle vblank every %.3f ms\n",
+                    (double)period / 1e6);
          }
       } else if (supported > 0) {
          fprintf(stderr, "wsi/videoout: 119.88 Hz refused (%d); presenting at 59.94 Hz\n", configured);
