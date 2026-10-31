@@ -49,6 +49,9 @@ if with_wsi_videoout and with_tests
        executable('wsi_videoout_hdr_test', 'wsi_videoout_hdr_test.c',
                   include_directories : inc_include),
        suite : ['vulkan'])
+  test('wsi_videoout_period',
+       executable('wsi_videoout_period_test', 'wsi_videoout_period_test.c'),
+       suite : ['vulkan'])
 endif
 
 wsi_entrypoints = custom_target(
