@@ -72,10 +72,12 @@
 #define VIDEOOUT_REFRESH_MILLIHERTZ 59940
 #define VIDEOOUT_HIGH_REFRESH_MILLIHERTZ 119880
 #define VIDEOOUT_PERIOD_INTERVALS 6
-/* Interpretation of observed title metadata, not a documented VideoOut API:
- * PS5_Vulkan R31/R92 used 0x80000 | 0x40 for fixed HFR. A title using
- * 0x40000 | 0x40 produced a console VRR conversion and VRR range log.
- * These observations motivate the VRR/VRR-disabled distinction below. */
+/* Interpretation of observed title metadata, not a documented VideoOut API.
+ * Original PS5, firmware 5.50, LG C1 (PS5_Vulkan jobs/r92-output-modes,
+ * 2026-10-31): attribute3 0x80040 logged AvControl "ERROR unknown vrr
+ * parameter(0x80040)" and "VRR:x" (fixed HFR); 0x40040 logged "VRR:TypeA",
+ * "119.88Hz request is converted to VRR 119.88Hz" and
+ * "VRR(peg:120 range:48 - 120)". Hence 0x40000 = VRR, 0x80000 = VRR off. */
 #define VIDEOOUT_ATTRIBUTE3_HIGH_FRAME_RATE 0x40u
 #define VIDEOOUT_ATTRIBUTE3_VRR 0x40000u
 #define VIDEOOUT_ATTRIBUTE3_VRR_DISABLED 0x80000u
